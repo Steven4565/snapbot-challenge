@@ -2,7 +2,7 @@ import numpy as np
 """ 
     Assume that the main notebook called 'sys.path.append('../../package/helper/')'
 """
-from transformation import r2rpy
+from transformation import r2rpy # type: ignore
 
 class SnapbotGymClass():
     """ 
@@ -35,6 +35,13 @@ class SnapbotGymClass():
         self.tick_history      = np.zeros((self.n_history,1))
         self.o_dim             = len(self.get_observation())
         self.a_dim             = env.n_ctrl
+
+        self.prev_contact_flag = False
+        self.max_torso_height = 0
+        self.max_z_vel = 0 # TODO: this is unused, remove this later
+        self.has_jumped = False
+        self.has_landed = False
+        self.airborne_time = 0
         
         if VERBOSE:
             print ("[%s] Instantiated"%
@@ -104,80 +111,113 @@ class SnapbotGymClass():
         a_max  = self.env.ctrl_ranges[:,1]
         action = a_min + (a_max-a_min)*np.random.rand(len(a_min))
         return action
-        
-    def step(self,a,max_time=np.inf):
+
+    def step(self, a, max_time=np.inf):
         """
             Step forward
         """
-        # Increse tick
-        self.tick = self.tick + 1
-        
-        # Previous torso position and yaw angle in degree
-        p_torso_prev       = self.env.get_p_body('torso')
-        R_torso_prev       = self.env.get_R_body('torso')
+        self.tick += 1
+
+        # Previous torso position and orientation
+        p_torso_prev = self.env.get_p_body('torso')
+        R_torso_prev = self.env.get_R_body('torso')
         yaw_torso_deg_prev = np.degrees(r2rpy(R_torso_prev)[2])
-        
-        # Run simulation for 'mujoco_nstep' steps
-        self.env.step(ctrl=a,nstep=self.mujoco_nstep)
-        
-        # Current torso position and yaw angle in degree
-        p_torso_curr       = self.env.get_p_body('torso')
-        R_torso_curr       = self.env.get_R_body('torso')
+
+        # Run simulation for `mujoco_nstep` steps
+        self.env.step(ctrl=a, nstep=self.mujoco_nstep)
+
+        # Current torso position and orientation
+        p_torso_curr = self.env.get_p_body('torso')
+        R_torso_curr = self.env.get_R_body('torso')
         yaw_torso_deg_curr = np.degrees(r2rpy(R_torso_curr)[2])
-        
-        # Compute the done signal
-        ROLLOVER = (np.dot(R_torso_curr[:,2],np.array([0,0,1]))<0.0)
-        if (self.get_sim_time() >= max_time) or ROLLOVER:
-            d = True
+
+        # Detect rollover (same as before)
+        ROLLOVER = (np.dot(R_torso_curr[:,2], np.array([0,0,1])) < 0.0)
+        done = (self.get_sim_time() >= max_time) or ROLLOVER
+
+        torso_height = p_torso_curr[2]
+        p_contacts, f_contacts, geom1s, geom2s, _, _ = self.env.get_contact_info()
+
+
+        # === Update maximum torso height so far
+        if torso_height > self.max_torso_height:
+            self.max_torso_height = torso_height
+
+        if done:
+            K_peak = 5.0
+            r_terminal = K_peak * self.max_torso_height
         else:
-            d = False
-        
-        # Compute forward reward
-        x_diff = p_torso_curr[0] - p_torso_prev[0] # x-directional displacement
-        r_forward = x_diff/self.dt
-        
-        # Check self-collision (excluding 'floor')
-        p_contacts,f_contacts,geom1s,geom2s,_,_ = self.env.get_contact_info(must_exclude_prefix='floor')
-        if len(geom1s) > 0: # self-collision occurred
-            SELF_COLLISION = 1
-            r_collision    = -10.0
+            r_terminal = 0.0
+
+
+        # === Instantaneous valocity reward
+        z_vel = (p_torso_curr[2] - p_torso_prev[2]) / self.dt
+        k_vel = 0.5
+        r_zvel = k_vel * max(z_vel, 0.0)
+
+
+        # === Takeoff reward
+        self.max_z_vel = max(z_vel, self.max_z_vel)
+        foot_on_floor = any((g == 'floor') for g in geom1s) or any((g == 'floor') for g in geom2s)
+
+        if self.prev_contact_flag and (not foot_on_floor):
+            if (z_vel >= 0):
+                r_takeoff = 2.0 * z_vel
+            else: 
+                r_takeoff = 1.0 * z_vel
+            self.has_jumped = True
         else:
-            SELF_COLLISION = 0
-            r_collision    = 0.0
-            
-        # Survival reward
+            r_takeoff = 0.0
+
+
+        # === Airborne time reward
+        r_airborne = 0
+        k_airborne = 5
+
+        if (not foot_on_floor): 
+            if (z_vel >= 0): 
+                r_airborne = k_airborne * z_vel
+            else: 
+                r_airborne = k_airborne/2 * z_vel
+
+        # === Combined rewards
+        r = 0
+        r += r_terminal 
+        r += r_takeoff 
+        # r += r_zvel
+        r += r_airborne
+
+        self.prev_contact_flag = foot_on_floor 
+
+        # === Survival / penalty on rollover (keep small positive reward until rollover)
         if ROLLOVER:
-            r_survive = -10.0
+            r *= 0.75
         else:
-            r_survive = 0.01
-        
-        # Heading reward
-        heading_vec = R_torso_curr[:,0] # x direction
-        r_heading = 0.01*np.dot(heading_vec,np.array([1,0,0]))
-        if r_heading < 0.0:
-            r_heading = r_heading*100.0 # focus more on penalizing going wrong direction
-            
-        # Lane keeping
-        lane_deviation = p_torso_curr[1] # y-directional displacement
-        r_lane = -np.abs(lane_deviation)*0.5
-        
-        # Compute reward
-        r = np.array(r_forward+r_collision+r_survive+r_heading+r_lane)
-        
-        # Accumulate state history (update 'state_history')
+            r = r + 0.01
+
+        # Accumulate state history
         self.accumulate_state_history()
-        
-        # Next observation 'accumulate_state_history' should be called before calling 'get_observation'
+
+        # Next observation
         o_prime = self.get_observation()
-        
-        # Other information
-        info = {'yaw_torso_deg_prev':yaw_torso_deg_prev,'yaw_torso_deg_curr':yaw_torso_deg_curr,
-                'x_diff':x_diff,'SELF_COLLISION':SELF_COLLISION,
-                'r_forward':r_forward,'r_collision':r_collision,'r_survive':r_survive,
-                'r_heading':r_heading,'r_lane':r_lane}
-        
-        # Return
-        return o_prime,r,d,info
+
+        # Info dict (add jump-relevant diagnostics if you like)
+        info = {
+            # 'yaw_torso_deg_prev': yaw_torso_deg_prev,
+            # 'yaw_torso_deg_curr': yaw_torso_deg_curr,
+            # 'r_stationary': r_stationary,
+            # 'f_contacts': f_contacts,
+            'foot_on_floor': foot_on_floor,
+            'r_terminal': r_terminal,
+            'r_airborne': r_airborne,
+            'r_takeoff': r_takeoff,
+            'z_vel': z_vel,
+            'torso_height': torso_height,
+            'r_zvel': r_zvel,
+            'r_survive': ROLLOVER,
+        }
+
+        return o_prime, r, done, info
     
     def render(
             self,
@@ -214,7 +254,7 @@ class SnapbotGymClass():
             self.env.plot_contact_info()
         # Plot time and tick on top of torso
         if PLOT_TIME:
-            self.env.plot_T(p=p_torso+0.25*R_torso[:,2],R=np.eye(3,3),
+            self.env.plot_T(p=p_torso+0.25*R_torso[:,2],R=np.eye(3,3), #type: ignore
                        plot_axis=False,label='[%.2f]sec'%(self.env.get_sim_time()))
         # Do render
         self.env.render()
