@@ -1,4 +1,5 @@
 import numpy as np
+import random
 """ 
     Assume that the main notebook called 'sys.path.append('../../package/helper/')'
 """
@@ -36,10 +37,12 @@ class SnapbotGymClass():
         self.o_dim             = len(self.get_observation())
         self.a_dim             = env.n_ctrl
 
+        self.stage = 0
+
         self.prev_contact_flag = False
         self.max_torso_height = 0
         self.has_jumped = False
-        self.has_landed = False
+        self.jump_start_location = 0
         self.airborne_time = 0
 
         
@@ -112,6 +115,48 @@ class SnapbotGymClass():
         action = a_min + (a_max-a_min)*np.random.rand(len(a_min))
         return action
 
+    def r_stage1(self, geom1s, geom2s, torso_vel, torso_p):
+        foot_list = [
+            'leg_module_1_4',
+            'leg_module_2_4',
+            'leg_module_3_4',
+            'leg_module_4_4',
+        ]
+
+        # === Penalize non feet contact with floor
+        non_feet_floor_contact = 0
+        for x, y in zip(geom1s, geom2s):
+            if (x == 'floor' or y == 'floor'): 
+                if (x not in foot_list and y not in foot_list):
+                    non_feet_floor_contact += 1
+
+        k_contact = 5
+        r_contact = -k_contact * non_feet_floor_contact
+
+        # === TODO: Encourage some or all feet to touch floor
+
+        # === Penalize for instability
+        vel_factor = np.linalg.norm(torso_vel)
+        k_vel = 0.5
+        r_stationary = -k_vel * vel_factor
+
+        # === Give reward for torso above a certain height
+        height_limit = 1.5
+        k_height = 4
+        r_height = 0
+        if (torso_p[2] > height_limit):
+            r_height += k_height
+
+
+        r = 0
+        r += r_contact
+        r += r_stationary
+        r += r_height
+        return r
+
+
+
+    
     def step(self, a, max_time=np.inf):
         """
             Step forward
@@ -138,8 +183,7 @@ class SnapbotGymClass():
         torso_height = p_torso_curr[2]
         p_contacts, f_contacts, geom1s, geom2s, _, _ = self.env.get_contact_info()
 
-        foot_on_floor = any((g == 'floor') for g in geom1s) or any((g == 'floor') for g in geom2s)
-        airborne = not foot_on_floor
+        touching_floor = any((g == 'floor') for g in geom1s) or any((g == 'floor') for g in geom2s)
         z_vel = (p_torso_curr[2] - p_torso_prev[2]) / self.dt
 
 
@@ -154,19 +198,9 @@ class SnapbotGymClass():
             r_terminal = 0.0
 
 
-        # === Potential based height shaping
-        k_phi = 5.0
-        gamma = 0.99
-
-        r_shape = 0
-        phi_prev = k_phi * p_torso_prev[2]
-        phi_curr = k_phi * p_torso_curr[2]
-        r_shape = gamma * phi_curr - phi_prev
-
-
         # === Takeoff reward
 
-        if self.prev_contact_flag and (not foot_on_floor):
+        if self.prev_contact_flag and (not touching_floor):
             if (z_vel >= 0):
                 r_takeoff = 2.0 * z_vel
             else: 
@@ -175,12 +209,20 @@ class SnapbotGymClass():
         else:
             r_takeoff = 0.0
 
+        # === Forward distance reward
+        distance = 0
+        k_distance = 5
+        if (touching_floor):
+            self.jump_start_location = p_torso_curr[0]
+        else: 
+            distance = p_torso_curr[0] - self.jump_start_location
+        r_dist = k_distance * distance
 
         # === Airborne time reward
         r_airborne = 0
-        k_airborne = 5
+        k_airborne = 3
 
-        if (not foot_on_floor): 
+        if (not touching_floor): 
             if (z_vel >= 0): 
                 r_airborne = k_airborne * z_vel
             else: 
@@ -188,16 +230,20 @@ class SnapbotGymClass():
 
         # === Combined rewards
         r = 0
-        r += r_terminal 
-        r += r_takeoff 
-        r += r_airborne
-        # r += r_shape
+        # r += r_terminal 
+        # r += r_takeoff 
+        # r += r_airborne
+        # r += r_dist
+        r += self.r_stage1(geom1s, geom2s, p_torso_curr - p_torso_prev, p_torso_curr)
 
-        self.prev_contact_flag = foot_on_floor 
+        self.prev_contact_flag = touching_floor 
 
         # === Survival / penalty on rollover (keep small positive reward until rollover)
         if ROLLOVER:
-            r *= 0.75
+            if (r > 10):
+                r *= 0.75
+            else:
+                r -= 10
         else:
             r = r + 0.01
 
@@ -211,16 +257,16 @@ class SnapbotGymClass():
         info = {
             # 'yaw_torso_deg_prev': yaw_torso_deg_prev,
             # 'yaw_torso_deg_curr': yaw_torso_deg_curr,
-            # 'r_stationary': r_stationary,
             # 'f_contacts': f_contacts,
-            'foot_on_floor': foot_on_floor,
-            'r_shape': r_shape,
-            'r_terminal': r_terminal,
-            'r_airborne': r_airborne,
-            'r_takeoff': r_takeoff,
             'z_vel': z_vel,
+            # 'distance': distance,
+            # 'r_dist': r_dist,
+            # 'touching_floor': touching_floor,
+            # 'r_terminal': r_terminal,
+            # 'r_airborne': r_airborne,
+            # 'r_takeoff': r_takeoff,
             'torso_height': torso_height,
-            'r_survive': ROLLOVER,
+            'r_survive': not ROLLOVER,
         }
 
         return o_prime, r, done, info
