@@ -38,10 +38,10 @@ class SnapbotGymClass():
 
         self.prev_contact_flag = False
         self.max_torso_height = 0
-        self.max_z_vel = 0 # TODO: this is unused, remove this later
         self.has_jumped = False
         self.has_landed = False
         self.airborne_time = 0
+
         
         if VERBOSE:
             print ("[%s] Instantiated"%
@@ -138,6 +138,10 @@ class SnapbotGymClass():
         torso_height = p_torso_curr[2]
         p_contacts, f_contacts, geom1s, geom2s, _, _ = self.env.get_contact_info()
 
+        foot_on_floor = any((g == 'floor') for g in geom1s) or any((g == 'floor') for g in geom2s)
+        airborne = not foot_on_floor
+        z_vel = (p_torso_curr[2] - p_torso_prev[2]) / self.dt
+
 
         # === Update maximum torso height so far
         if torso_height > self.max_torso_height:
@@ -150,15 +154,17 @@ class SnapbotGymClass():
             r_terminal = 0.0
 
 
-        # === Instantaneous valocity reward
-        z_vel = (p_torso_curr[2] - p_torso_prev[2]) / self.dt
-        k_vel = 0.5
-        r_zvel = k_vel * max(z_vel, 0.0)
+        # === Potential based height shaping
+        k_phi = 5.0
+        gamma = 0.99
+
+        r_shape = 0
+        phi_prev = k_phi * p_torso_prev[2]
+        phi_curr = k_phi * p_torso_curr[2]
+        r_shape = gamma * phi_curr - phi_prev
 
 
         # === Takeoff reward
-        self.max_z_vel = max(z_vel, self.max_z_vel)
-        foot_on_floor = any((g == 'floor') for g in geom1s) or any((g == 'floor') for g in geom2s)
 
         if self.prev_contact_flag and (not foot_on_floor):
             if (z_vel >= 0):
@@ -184,8 +190,8 @@ class SnapbotGymClass():
         r = 0
         r += r_terminal 
         r += r_takeoff 
-        # r += r_zvel
         r += r_airborne
+        # r += r_shape
 
         self.prev_contact_flag = foot_on_floor 
 
@@ -208,12 +214,12 @@ class SnapbotGymClass():
             # 'r_stationary': r_stationary,
             # 'f_contacts': f_contacts,
             'foot_on_floor': foot_on_floor,
+            'r_shape': r_shape,
             'r_terminal': r_terminal,
             'r_airborne': r_airborne,
             'r_takeoff': r_takeoff,
             'z_vel': z_vel,
             'torso_height': torso_height,
-            'r_zvel': r_zvel,
             'r_survive': ROLLOVER,
         }
 
