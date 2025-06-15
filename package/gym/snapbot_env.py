@@ -133,8 +133,8 @@ class SnapbotGymClass():
             d = False
         
         # Compute forward reward
-        x_diff = p_torso_curr[0] - p_torso_prev[0] # x-directional displacement
-        r_forward = x_diff/self.dt
+        y_diff = p_torso_curr[1] - p_torso_prev[1] # y-directional displacement
+        r_sideways = y_diff/self.dt
         
         # Check self-collision (excluding 'floor')
         p_contacts,f_contacts,geom1s,geom2s,_,_ = self.env.get_contact_info(must_exclude_prefix='floor')
@@ -152,17 +152,23 @@ class SnapbotGymClass():
             r_survive = 0.01
         
         # Heading reward
-        heading_vec = R_torso_curr[:,0] # x direction
-        r_heading = 0.01*np.dot(heading_vec,np.array([1,0,0]))
-        if r_heading < 0.0:
-            r_heading = r_heading*100.0 # focus more on penalizing going wrong direction
+        k = 1
+        theta = 5.0 # Degrees threshold
+        alpha = 0.2 # exp kernel parameter
+        r_heading = 0
+
+        if yaw_torso_deg_curr <= theta:
+            r_heading = k * (1 - (yaw_torso_deg_curr/theta)**2)
+        else:
+            r_heading = -k * (np.exp(alpha * (yaw_torso_deg_curr - theta)) - 1)
+
             
         # Lane keeping
-        lane_deviation = p_torso_curr[1] # y-directional displacement
+        lane_deviation = p_torso_curr[0] # x-directional displacement
         r_lane = -np.abs(lane_deviation)*0.5
         
         # Compute reward
-        r = np.array(r_forward+r_collision+r_survive+r_heading+r_lane)
+        r = np.array(r_sideways+r_collision+r_survive+r_heading+r_lane)
         
         # Accumulate state history (update 'state_history')
         self.accumulate_state_history()
@@ -171,10 +177,13 @@ class SnapbotGymClass():
         o_prime = self.get_observation()
         
         # Other information
-        info = {'yaw_torso_deg_prev':yaw_torso_deg_prev,'yaw_torso_deg_curr':yaw_torso_deg_curr,
-                'x_diff':x_diff,'SELF_COLLISION':SELF_COLLISION,
-                'r_forward':r_forward,'r_collision':r_collision,'r_survive':r_survive,
-                'r_heading':r_heading,'r_lane':r_lane}
+        info = {
+                    'r_heading': r_heading,
+                    'yaw_torso_deg_prev':yaw_torso_deg_prev,'yaw_torso_deg_curr':yaw_torso_deg_curr,
+                    'x_diff':y_diff,'SELF_COLLISION':SELF_COLLISION,
+                    'r_forward':r_sideways,'r_collision':r_collision,'r_survive':r_survive,
+                    'r_heading':r_heading,'r_lane':r_lane,
+                }
         
         # Return
         return o_prime,r,d,info
