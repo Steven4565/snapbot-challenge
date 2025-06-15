@@ -125,27 +125,30 @@ class SnapbotGymClass():
 
         # === Penalize non feet contact with floor
         non_feet_floor_contact = 0
+        feet_floor_contact = 0
         for x, y in zip(geom1s, geom2s):
             if (x == 'floor' or y == 'floor'): 
                 if (x not in foot_list and y not in foot_list):
                     non_feet_floor_contact += 1
+                else: 
+                    feet_floor_contact += 1
 
-        k_contact = 5
+        k_contact = 0.2
         r_contact = -k_contact * non_feet_floor_contact
 
         # === TODO: Encourage some or all feet to touch floor
+        k_grounded_feet = 0.1
+        r_grounded = k_grounded_feet * feet_floor_contact
 
         # === Penalize for instability
         vel_factor = np.linalg.norm(torso_vel)
-        k_vel = 0.5
+        k_vel = 0.1
         r_stationary = -k_vel * vel_factor
 
         # === Give reward for torso above a certain height
         height_limit = 1.5
-        k_height = 4
-        r_height = 0
-        if (torso_p[2] > height_limit):
-            r_height += k_height
+        k_height = 0.5
+        r_height = max(torso_p[2], height_limit) * k_height
 
 
         r = 0
