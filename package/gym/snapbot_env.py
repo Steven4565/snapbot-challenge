@@ -1,3 +1,4 @@
+from sys import builtin_module_names
 import numpy as np
 """ 
     Assume that the main notebook called 'sys.path.append('../../package/helper/')'
@@ -42,6 +43,7 @@ class SnapbotGymClass():
         self.has_landed = False
         self.airborne_time = 0
 
+        self.upwards_accelerate_time = 0
         
         if VERBOSE:
             print ("[%s] Instantiated"%
@@ -51,7 +53,23 @@ class SnapbotGymClass():
             print ("   [history] total_sec:[%.2f]sec, n:[%d], intv_sec:[%.2f]sec, intv_tick:[%d]"%
                    (self.history_total_sec,self.n_history,self.history_intv_sec,self.history_intv_tick))
             print ("   [history] ticks:%s"%(self.history_ticks))
-        
+
+    def compute_symmetry_reward(self, qpos, k=10.0):
+        L = [('Leg_module_1_2','Leg_module_2_2'), ('Leg_module_1_3','Leg_module_2_3'),
+            ('Leg_module_4_2','Leg_module_5_2'), ('Leg_module_4_3','Leg_module_5_3')]
+
+        torso = self.env.get_p_body(body_name="torso")
+        sum_err = 0
+
+        for l, r in L:
+            left = self.env.get_p_body(body_name=l)
+            right = self.env.get_p_body(body_name=r)
+            target = 2 * torso - left
+            error = np.linalg.norm(right - target)
+            sum_err += error
+
+        return np.exp(-k * sum_err)
+
     def get_state(self):
         """
             Get state (33)
@@ -148,56 +166,56 @@ class SnapbotGymClass():
             self.max_torso_height = torso_height
 
         if done:
-            K_peak = 5.0
+            K_peak = 600 # untested
             r_terminal = K_peak * self.max_torso_height
         else:
             r_terminal = 0.0
 
+        # === Upwards velocity reward
+        # Incentive for the model to get velocity at start of the training (untested)
+        k_z_vel = 0.2
+        r_z_vel = 0
+        if (z_vel > 0):
+            self.upwards_accelerate_time += 1
+            r_z_vel = k_z_vel * z_vel * (1 + self.upwards_accelerate_time/5)
+        else: 
+            self.upwards_accelerate_time = 0
 
-        # === Potential based height shaping
-        k_phi = 5.0
-        gamma = 0.99
-
-        r_shape = 0
-        phi_prev = k_phi * p_torso_prev[2]
-        phi_curr = k_phi * p_torso_curr[2]
-        r_shape = gamma * phi_curr - phi_prev
 
 
         # === Takeoff reward
-
+        r_takeoff = 0
         if self.prev_contact_flag and (not foot_on_floor):
             if (z_vel >= 0):
-                r_takeoff = 2.0 * z_vel
-            else: 
-                r_takeoff = 1.0 * z_vel
+                r_takeoff = 2.0 * z_vel / 2
             self.has_jumped = True
-        else:
-            r_takeoff = 0.0
+
+        # === Disposition penalty
+        disp = p_torso_curr[0] + p_torso_curr[1]
+        k_disp = 1
+        r_disp = np.exp(-k_disp * disp)
 
 
         # === Airborne time reward
         r_airborne = 0
-        k_airborne = 5
+        k_airborne = 5/2
 
-        if (not foot_on_floor): 
+        if (airborne): 
             if (z_vel >= 0): 
                 r_airborne = k_airborne * z_vel
-            else: 
-                r_airborne = k_airborne/2 * z_vel
 
         # === Combined rewards
         r = 0
         r += r_terminal 
         r += r_takeoff 
         r += r_airborne
-        # r += r_shape
+        r += r_z_vel
 
         self.prev_contact_flag = foot_on_floor 
 
         # === Survival / penalty on rollover (keep small positive reward until rollover)
         if ROLLOVER:
-            r *= 0.75
+            r *= 0.25 # untested
         else:
             r = r + 0.01
 
@@ -209,17 +227,14 @@ class SnapbotGymClass():
 
         # Info dict (add jump-relevant diagnostics if you like)
         info = {
-            # 'yaw_torso_deg_prev': yaw_torso_deg_prev,
-            # 'yaw_torso_deg_curr': yaw_torso_deg_curr,
             # 'r_stationary': r_stationary,
             # 'f_contacts': f_contacts,
-            'foot_on_floor': foot_on_floor,
-            'r_shape': r_shape,
-            'r_terminal': r_terminal,
+            'z_vel': z_vel,
             'r_airborne': r_airborne,
             'r_takeoff': r_takeoff,
-            'z_vel': z_vel,
+            'r_terminal': r_terminal,
             'torso_height': torso_height,
+            'foot_on_floor': foot_on_floor,
             'r_survive': ROLLOVER,
         }
 
