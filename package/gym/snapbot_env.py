@@ -35,6 +35,13 @@ class SnapbotGymClass():
         self.tick_history      = np.zeros((self.n_history,1))
         self.o_dim             = len(self.get_observation())
         self.a_dim             = env.n_ctrl
+
+        # Curriculum 1
+        self.target_angle = 0
+        self.target_hit_count = 0
+        self.target_min_overlap = 10
+
+        self.curriculum_stage = 1
         
         if VERBOSE:
             print ("[%s] Instantiated"%
@@ -44,6 +51,13 @@ class SnapbotGymClass():
             print ("   [history] total_sec:[%.2f]sec, n:[%d], intv_sec:[%.2f]sec, intv_tick:[%d]"%
                    (self.history_total_sec,self.n_history,self.history_intv_sec,self.history_intv_tick))
             print ("   [history] ticks:%s"%(self.history_ticks))
+
+    def within_angle_range(self, val, base, dev):
+        lower_bound = base-dev
+        upper_bound = base+dev
+        if (val > lower_bound and val < upper_bound):
+            return True
+        return False
         
     def get_state(self):
         """
@@ -152,15 +166,22 @@ class SnapbotGymClass():
             r_survive = 0.01
         
         # Heading reward
-        k = 1
-        theta = 5.0 # Degrees threshold
-        alpha = 0.2 # exp kernel parameter
-        r_heading = 0
+        k = 10
+        theta = 45.0 # Degrees threshold
+        alpha = 0.05 # exp kernel parameter
+        # r_heading = 0.01
+        # if yaw_torso_deg_curr <= theta:
+        #     r_heading = k/10 * (1 - (yaw_torso_deg_curr/theta)**2) * 0
+        # else:
+        #     r_heading = -k * (np.exp(alpha * (yaw_torso_deg_curr - theta)) - 1)
 
-        if yaw_torso_deg_curr <= theta:
-            r_heading = k * (1 - (yaw_torso_deg_curr/theta)**2)
-        else:
-            r_heading = -k * (np.exp(alpha * (yaw_torso_deg_curr - theta)) - 1)
+        heading_vec = R_torso_curr[:,1]
+        r_heading = 0.01 * np.dot(heading_vec, np.array([0,1,0]))
+        if r_heading < 0.0:
+            r_heading *= 100.0
+
+        if (abs(yaw_torso_deg_curr) > theta):
+            r_sideways *= np.dot(heading_vec, np.array([0,1,0]))
 
             
         # Lane keeping
@@ -178,12 +199,17 @@ class SnapbotGymClass():
         
         # Other information
         info = {
-                    'r_heading': r_heading,
-                    'yaw_torso_deg_prev':yaw_torso_deg_prev,'yaw_torso_deg_curr':yaw_torso_deg_curr,
-                    'x_diff':y_diff,'SELF_COLLISION':SELF_COLLISION,
-                    'r_forward':r_sideways,'r_collision':r_collision,'r_survive':r_survive,
-                    'r_heading':r_heading,'r_lane':r_lane,
-                }
+            'r_heading': r_heading,
+            'y_diff':y_diff,
+            'SELF_COLLISION':SELF_COLLISION,
+            'yaw_torso_deg_prev':yaw_torso_deg_prev,
+            'yaw_torso_deg_curr':yaw_torso_deg_curr,
+            'r_forward':r_sideways,
+            'r_collision':r_collision,
+            'r_survive':r_survive,
+            'r_heading':r_heading,
+            'r_lane':r_lane,
+        }
         
         # Return
         return o_prime,r,d,info
