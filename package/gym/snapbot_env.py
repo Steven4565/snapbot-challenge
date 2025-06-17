@@ -42,6 +42,8 @@ class SnapbotGymClass():
         self.has_jumped = False
         self.has_landed = False
         self.airborne_time = 0
+
+        self.start_jump_p = [0, 0, 0]
         
         if VERBOSE:
             print ("[%s] Instantiated"%
@@ -179,10 +181,13 @@ class SnapbotGymClass():
         # === Takeoff reward
         r_takeoff = 0
         if self.prev_contact_flag and (airborne):
+            # On Takeoff
             self.airborne_time = 1
             if (z_vel >= 0):
                 r_takeoff = z_vel 
             self.has_jumped = True
+
+            self.start_jump_p = p_torso_curr
 
         # === Symmetry reward
         r_sym = 0
@@ -192,19 +197,16 @@ class SnapbotGymClass():
 
         # === Airborne time reward
         r_airborne = 0
-        k_airborne = 5/2
+        k_airborne = 1
 
-        r_shortlift_penalty = 0
+        r_jump_dist = 0
+        k_jump_dist = 1
 
         if (not self.prev_contact_flag and airborne): 
             # While in the air
             self.airborne_time += 1
-
-        if (not self.prev_contact_flag and not airborne): 
-            # On landing
-            if (self.airborne_time < 4):
-                r_shortlift_penalty = -k_airborne * self.airborne_time
-            self.airborne_time = 0
+            
+            r_jump_dist = k_jump_dist * np.linalg.norm(p_torso_curr - self.start_jump_p)
 
         if (airborne): 
             if (z_vel >= 0): 
@@ -212,12 +214,12 @@ class SnapbotGymClass():
 
         # === Combined rewards
         r = 0
-        r += r_terminal 
-        r += r_takeoff 
-        r += r_airborne
-        r += r_z_vel
-        r += r_shortlift_penalty
-        # r += r_sym
+        # r += r_terminal 
+        # r += r_takeoff 
+        # r += r_airborne
+        r += r_jump_dist
+        # r += r_z_vel
+        # r += r_shortlift_penalty
 
         self.prev_contact_flag = foot_on_floor 
 
