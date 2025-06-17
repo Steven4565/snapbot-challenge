@@ -166,9 +166,8 @@ class SnapbotGymClass():
             self.max_torso_height = torso_height
 
         if done:
-            # K_peak = 5
-            # r_terminal = K_peak * self.max_torso_height
-            r_terminal = 0.1 * np.exp(25 * (self.max_torso_height - 0.2))
+            K_peak = 5
+            r_terminal = K_peak * self.max_torso_height
         else:
             r_terminal = 0.0
 
@@ -189,24 +188,18 @@ class SnapbotGymClass():
 
             self.start_jump_p = p_torso_curr
 
-        # === Symmetry reward
-        r_sym = 0
-        if (airborne and torso_height < 0.10):
-            r_sym = self.compute_symmetry_reward(400)[0]
-
-
         # === Airborne time reward
         r_airborne = 0
         k_airborne = 1
 
         r_jump_dist = 0
-        k_jump_dist = 1
+        k_jump_dist = 5
 
         if (not self.prev_contact_flag and airborne): 
             # While in the air
             self.airborne_time += 1
             
-            r_jump_dist = k_jump_dist * np.linalg.norm(p_torso_curr - self.start_jump_p)
+            r_jump_dist = k_jump_dist * np.linalg.norm(p_torso_curr[:2] - self.start_jump_p[:2])
 
         if (airborne): 
             if (z_vel >= 0): 
@@ -214,12 +207,11 @@ class SnapbotGymClass():
 
         # === Combined rewards
         r = 0
-        # r += r_terminal 
-        # r += r_takeoff 
-        # r += r_airborne
+        r += r_terminal 
+        r += r_takeoff 
+        r += r_airborne
+        r += r_z_vel
         r += r_jump_dist
-        # r += r_z_vel
-        # r += r_shortlift_penalty
 
         self.prev_contact_flag = foot_on_floor 
 
@@ -237,10 +229,11 @@ class SnapbotGymClass():
 
         # Info dict (add jump-relevant diagnostics if you like)
         info = {
-            # 'r_stationary': r_stationary,
-            # 'f_contacts': f_contacts,
-            'r_sym': r_sym,
-            'r_shortlift': r_shortlift_penalty,
+            'f_contacts': f_contacts,
+            'p_contacts': p_contacts,
+            'geom1s': geom1s,
+            'geom2s': geom2s,
+            'r_jump_dist': r_jump_dist,
             'z_vel': z_vel,
             'r_airborne': r_airborne,
             'r_takeoff': r_takeoff,
