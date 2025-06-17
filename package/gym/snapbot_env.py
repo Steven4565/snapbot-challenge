@@ -42,8 +42,6 @@ class SnapbotGymClass():
         self.has_jumped = False
         self.has_landed = False
         self.airborne_time = 0
-
-        self.upwards_accelerate_time = 0
         
         if VERBOSE:
             print ("[%s] Instantiated"%
@@ -54,21 +52,21 @@ class SnapbotGymClass():
                    (self.history_total_sec,self.n_history,self.history_intv_sec,self.history_intv_tick))
             print ("   [history] ticks:%s"%(self.history_ticks))
 
-    def compute_symmetry_reward(self, qpos, k=10.0):
-        L = [('Leg_module_1_2','Leg_module_2_2'), ('Leg_module_1_3','Leg_module_2_3'),
-            ('Leg_module_4_2','Leg_module_5_2'), ('Leg_module_4_3','Leg_module_5_3')]
+    def compute_symmetry_reward(self, k=1.0):
+        L = [('Leg_module_1_4','Leg_module_2_4'), ('Leg_module_5_4','Leg_module_4_4')]
+        L2 = ['Leg_module_1_4', 'Leg_module_2_4', 'Leg_module_5_4','Leg_module_4_4']
 
-        torso = self.env.get_p_body(body_name="torso")
-        sum_err = 0
+        error = 0
 
-        for l, r in L:
-            left = self.env.get_p_body(body_name=l)
-            right = self.env.get_p_body(body_name=r)
-            target = 2 * torso - left
-            error = np.linalg.norm(right - target)
-            sum_err += error
+        # for l, r in L:
+        #     left = self.env.get_p_body(body_name=l)[2]
+        #     right = self.env.get_p_body(body_name=r)[2]
+        #     error += abs(left-right)
+        
+        pos = [self.env.get_p_body(body_name=name)[2] for name in L2]
+        error = np.var(pos)
 
-        return np.exp(-k * sum_err)
+        return np.exp(-k * error), pos
 
     def get_state(self):
         """
@@ -166,39 +164,47 @@ class SnapbotGymClass():
             self.max_torso_height = torso_height
 
         if done:
-            K_peak = 600 # untested
-            r_terminal = K_peak * self.max_torso_height
+            # K_peak = 5
+            # r_terminal = K_peak * self.max_torso_height
+            r_terminal = 0.1 * np.exp(25 * (self.max_torso_height - 0.2))
         else:
             r_terminal = 0.0
 
         # === Upwards velocity reward
-        # Incentive for the model to get velocity at start of the training (untested)
-        k_z_vel = 0.2
+        k_z_vel = 0.1
         r_z_vel = 0
         if (z_vel > 0):
-            self.upwards_accelerate_time += 1
-            r_z_vel = k_z_vel * z_vel * (1 + self.upwards_accelerate_time/5)
-        else: 
-            self.upwards_accelerate_time = 0
-
-
+            r_z_vel = k_z_vel * z_vel
 
         # === Takeoff reward
         r_takeoff = 0
-        if self.prev_contact_flag and (not foot_on_floor):
+        if self.prev_contact_flag and (airborne):
+            self.airborne_time = 1
             if (z_vel >= 0):
-                r_takeoff = 2.0 * z_vel / 2
+                r_takeoff = z_vel 
             self.has_jumped = True
 
-        # === Disposition penalty
-        disp = p_torso_curr[0] + p_torso_curr[1]
-        k_disp = 1
-        r_disp = np.exp(-k_disp * disp)
+        # === Symmetry reward
+        r_sym = 0
+        if (airborne and torso_height < 0.10):
+            r_sym = self.compute_symmetry_reward(400)[0]
 
 
         # === Airborne time reward
         r_airborne = 0
         k_airborne = 5/2
+
+        r_shortlift_penalty = 0
+
+        if (not self.prev_contact_flag and airborne): 
+            # While in the air
+            self.airborne_time += 1
+
+        if (not self.prev_contact_flag and not airborne): 
+            # On landing
+            if (self.airborne_time < 4):
+                r_shortlift_penalty = -k_airborne * self.airborne_time
+            self.airborne_time = 0
 
         if (airborne): 
             if (z_vel >= 0): 
@@ -210,12 +216,14 @@ class SnapbotGymClass():
         r += r_takeoff 
         r += r_airborne
         r += r_z_vel
+        r += r_shortlift_penalty
+        # r += r_sym
 
         self.prev_contact_flag = foot_on_floor 
 
         # === Survival / penalty on rollover (keep small positive reward until rollover)
         if ROLLOVER:
-            r *= 0.25 # untested
+            r *= 0.25
         else:
             r = r + 0.01
 
@@ -229,6 +237,8 @@ class SnapbotGymClass():
         info = {
             # 'r_stationary': r_stationary,
             # 'f_contacts': f_contacts,
+            'r_sym': r_sym,
+            'r_shortlift': r_shortlift_penalty,
             'z_vel': z_vel,
             'r_airborne': r_airborne,
             'r_takeoff': r_takeoff,
