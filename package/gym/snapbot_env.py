@@ -159,6 +159,7 @@ class SnapbotGymClass():
         foot_on_floor = any((g == 'floor') for g in geom1s) or any((g == 'floor') for g in geom2s)
         airborne = not foot_on_floor
         z_vel = (p_torso_curr[2] - p_torso_prev[2]) / self.dt
+        x_vel = (p_torso_curr[0] - p_torso_prev[0]) / self.dt
 
 
         # === Update maximum torso height so far
@@ -176,6 +177,11 @@ class SnapbotGymClass():
         r_z_vel = 0
         if (z_vel > 0):
             r_z_vel = k_z_vel * z_vel
+
+
+        r_x_vel = 0
+        if (airborne):
+            r_x_vel += k_z_vel * max(x_vel, 0)
 
         # === Takeoff reward
         r_takeoff = 0
@@ -212,6 +218,7 @@ class SnapbotGymClass():
         r += r_airborne
         r += r_z_vel
         r += r_jump_dist
+        r += r_x_vel
 
         self.prev_contact_flag = foot_on_floor 
 
