@@ -199,6 +199,7 @@ class SnapbotGymClass():
         
         # Other information
         info = {
+            'y_dist': p_torso_curr[1],
             'r_heading': r_heading,
             'y_diff':y_diff,
             'SELF_COLLISION':SELF_COLLISION,
